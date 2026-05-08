@@ -1887,7 +1887,12 @@ window.addEventListener('load',function(){
 
 <!-- ══ REGISTRO ══ -->
 <section class="scr" id="scr-reg">
-  <div class="f2 fw7 mb12" style="font-size:1.05rem">➕ Registrar</div>
+  <div class="flex fb fca mb12">
+    <div class="f2 fw7" style="font-size:1.05rem">➕ Registrar</div>
+    <button class="ri-scan-btn" onclick="openRegScan()" title="Escanear foto de recibo/ticket">
+      <span>📷</span><span class="ri-scan-lbl">Escanear</span>
+    </button>
+  </div>
   <div class="rm-bar">
     <button class="rm-btn active gasto" id="rm-gasto" onclick="setRegMode('gasto')">💸 Gasto</button>
     <button class="rm-btn ingreso" id="rm-ingreso" onclick="setRegMode('ingreso')">💰 Ingreso</button>
@@ -4583,6 +4588,546 @@ function masMeta(tab,btn){
   if(tab==='analisis'){renderAnalisis();const ac2=document.getElementById('analisis-content');const ac3=document.getElementById('mas-analisis-content');if(ac2&&ac3)ac3.innerHTML=ac2.innerHTML;}
   if(tab==='ciclos'){const cc2=document.getElementById('ciclos-content');const cc3=document.getElementById('mas-ciclos-content');if(cc2&&cc3){metasTab('ciclos');setTimeout(()=>{cc3.innerHTML=cc2.innerHTML;},120);}}
 }
+
+/* ═══════════════════════════════════════ REG-SCAN MODULE ══ */
+let _rscImageB64 = null;
+let _rscRecords  = [];
+let _rscImgExpanded = false;
+
+/* ── Open / Close ── */
+function openRegScan(){
+  _rscReset(false);
+  const el=document.getElementById('mf-regscan');
+  if(el){ el.classList.add('open'); document.body.style.overflow='hidden'; }
+  // Si corre en artifact y no tiene Gemini key → mostrar setup guiado inmediatamente
+  if(_isInArtifact()&&!LS.g('gastomedGeminiKey','')){
+    setTimeout(()=>_rscShowGeminiSetup(),120);
+  }
+}
+function closeRegScan(){
+  const el=document.getElementById('mf-regscan');
+  if(el){ el.classList.remove('open'); document.body.style.overflow=''; }
+}
+
+/* ── Zone switcher ── */
+const _RSC_ZONES=['upload','preview','loading','results','done'];
+function _rscShow(zone){
+  _RSC_ZONES.forEach(z=>{
+    const el=document.getElementById('rsc-zone-'+z);
+    if(el) el.style.display=(z===zone)?'':'none';
+  });
+  // Update subtitle
+  const sub=document.getElementById('rsc-hdr-sub');
+  if(sub){
+    const labels={upload:'Sube un ticket o recibo',preview:'Listo para analizar',loading:'Procesando con IA...',results:'Revisa y confirma los registros',done:'¡Registros guardados!'};
+    sub.textContent=labels[zone]||'';
+  }
+}
+
+/* ── Reset ── */
+function _rscReset(keepZone){
+  _rscImageB64=null; _rscRecords=[]; _rscImgExpanded=false;
+  const fi=document.getElementById('rsc-file-input'); if(fi)fi.value='';
+  ['rsc-img-preview','rsc-img-thumb','rsc-img-full'].forEach(id=>{const e=document.getElementById(id);if(e)e.src='';});
+  const al=document.getElementById('rsc-alerts-zone'); if(al)al.innerHTML='';
+  const rl=document.getElementById('rsc-records-list'); if(rl)rl.innerHTML='';
+  const ab=document.getElementById('rsc-action-bar'); if(ab)ab.style.display='none';
+  const ex=document.getElementById('rsc-img-expanded'); if(ex)ex.style.display='none';
+  if(!keepZone) _rscShow('upload');
+}
+
+function rscClearAll(){ _rscReset(false); }
+
+/* ── Setup guiado Gemini (cuando no hay key en artifact mode) ── */
+function _rscShowGeminiSetup(){
+  const zone=document.getElementById('rsc-zone-upload');
+  if(!zone) return;
+  const old=zone.querySelector('.rsc-gemini-setup'); if(old)old.remove();
+  const box=document.createElement('div');
+  box.className='rsc-gemini-setup';
+  box.style.cssText='background:rgba(62,223,170,.07);border:1.5px solid rgba(62,223,170,.35);border-radius:14px;padding:18px 16px;margin-top:14px;animation:fadeIn .3s ease';
+  box.innerHTML=`
+    <div style="font-size:1.3rem;margin-bottom:6px">🔑 Configura Gemini Vision</div>
+    <div style="font-size:.83rem;color:var(--text2);margin-bottom:14px;line-height:1.5">
+      Para escanear tickets desde aquí necesitas una <b>Gemini API Key</b>.<br>
+      Es <b>100% gratis</b> y tarda menos de 2 minutos.
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;font-size:.82rem">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="background:rgba(62,223,170,.2);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">1</span>
+        <span>Abre <b><a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--teal)">aistudio.google.com/app/apikey</a></b> → clic en <b>"Create API Key"</b></span>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="background:rgba(62,223,170,.2);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">2</span>
+        <span>Copia la key que empieza con <b>AIza…</b></span>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="background:rgba(62,223,170,.2);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">3</span>
+        <span>Pégala aquí abajo y guarda</span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input id="rsc-gemini-inline-key" type="password" placeholder="AIza..." autocomplete="new-password"
+        style="flex:1;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:9px 12px;color:var(--text);font-size:.83rem;outline:none">
+      <button onclick="_rscSaveGeminiInline()"
+        style="background:linear-gradient(135deg,var(--teal),var(--accent));border:none;border-radius:10px;padding:9px 16px;color:#fff;font-weight:700;font-size:.83rem;cursor:pointer;white-space:nowrap">
+        💾 Guardar
+      </button>
+    </div>
+    <div id="rsc-gemini-inline-status" style="font-size:.77rem;margin-top:6px;min-height:14px;color:var(--teal)"></div>
+  `;
+  zone.appendChild(box);
+}
+
+function _rscSaveGeminiInline(){
+  const inp=document.getElementById('rsc-gemini-inline-key');
+  const st=document.getElementById('rsc-gemini-inline-status');
+  const val=(inp?.value||'').trim();
+  if(!val){if(st)st.textContent='⚠️ Ingresa la key primero';return;}
+  if(!val.startsWith('AIza')){if(st)st.textContent='⚠️ La key debe empezar con AIza...';return;}
+  LS.s('gastomedGeminiKey',val);
+  if(st){st.textContent='✅ ¡Guardada! Ahora sube tu ticket.';st.style.color='var(--teal)';}
+  const box=document.querySelector('.rsc-gemini-setup');
+  if(box) setTimeout(()=>box.remove(),1800);
+  // Sync with config panel if visible
+  const cfgInp=document.getElementById('cfg-gemini-key');
+  if(cfgInp) cfgInp.value=val;
+  const cfgSt=document.getElementById('gemini-key-status');
+  if(cfgSt) cfgSt.textContent='✅ Key configurada';
+}
+
+/* ── Load image ── */
+function rscLoadImage(input){
+  const file=input?.files?.[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    _rscImageB64=e.target.result;
+    const prev=document.getElementById('rsc-img-preview');
+    if(prev) prev.src=_rscImageB64;
+    _rscShow('preview');
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ── Analyze ── */
+async function rscAnalyzeImage(){
+  if(!_rscImageB64) return toast('⚠️ No hay imagen cargada');
+  _rscShow('loading');
+  try{
+    const cats=Object.keys(D.budgets||{}).concat(['medicamentos','salud','alimentacion','transporte','servicios','hogar','entretenimiento','otros']);
+    const uniqueCats=[...new Set(cats)];
+    const pagoOpts=(typeof getPagoOpts==='function')?getPagoOpts():['Efectivo','Yape','Plin'];
+    const today=todayISO();
+    const b64=_rscImageB64.includes(',')?_rscImageB64.split(',')[1]:_rscImageB64;
+    const mt=_rscImageB64.toLowerCase().includes('png')?'image/png':
+              _rscImageB64.toLowerCase().includes('webp')?'image/webp':'image/jpeg';
+
+    const systemPrompt=`Eres un asistente de finanzas personales peruano. Analiza imágenes de tickets, boletas, recibos o listas de gastos. Extrae TODOS los registros de gasto de forma estructurada.
+
+RESPONDE ÚNICAMENTE con JSON válido, sin markdown, sin explicaciones. Formato exacto:
+{
+  "tipo": "ticket" | "boleta" | "recibo" | "lista" | "otro",
+  "comercio": "nombre o null",
+  "fecha_documento": "YYYY-MM-DD o null",
+  "moneda": "PEN" | "USD",
+  "registros": [
+    {
+      "descripcion": "descripción del ítem",
+      "monto": 12.50,
+      "fecha": "YYYY-MM-DD o null",
+      "categoria_sugerida": "una de: ${uniqueCats.slice(0,10).join(', ')}",
+      "pago_sugerido": "una de: ${pagoOpts.slice(0,5).join(', ')}",
+      "es_total": false,
+      "es_descuento": false
+    }
+  ],
+  "total_documento": 45.80,
+  "inconsistencias": []
+}
+REGLAS: monto siempre número decimal. es_total=true solo para la línea TOTAL. es_descuento=true para devoluciones/descuentos. Si no hay fecha usa hoy: ${today}. Si la imagen no tiene gastos visibles, devuelve registros=[].`;
+
+    // ── Motor de visión: Gemini Vision (funciona en artifact + standalone, 100% gratis) ──
+    async function _visionGemini(){
+      const gemKey=LS.g('gastomedGeminiKey','')||'';
+      if(!gemKey) throw new Error('NO_KEY_GEMINI');
+      const models=['gemini-2.5-flash','gemini-2.0-flash','gemini-2.5-flash-lite'];
+      let lastErr='Sin cuota disponible';
+      for(const model of models){
+        try{
+          // maxOutputTokens:8192 — necesario para tablas grandes (20+ filas ~1000 tokens pretty-printed)
+          // No usar responseMimeType:'application/json' — incompatible con vision en algunos modelos
+          const body={
+            system_instruction:{parts:[{text:systemPrompt}]},
+            contents:[{role:'user',parts:[
+              {inline_data:{mime_type:mt,data:b64}},
+              {text:'Analiza este ticket/recibo. Responde SOLO con JSON compacto en UNA SOLA LÍNEA, sin saltos de línea internos, sin markdown, sin espacios extra.'}
+            ]}],
+            generationConfig:{maxOutputTokens:8192,temperature:0.1}
+          };
+          const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemKey}`,
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          if(!resp.ok){
+            const e=await resp.json().catch(()=>({}));
+            const msg=e.error?.message||String(resp.status);
+            const skip=resp.status===429||resp.status===404||/quota|resource_exhausted|not found|not supported/i.test(msg);
+            if(skip){lastErr=model+': '+msg;continue;}
+            throw new Error(msg);
+          }
+          const data=await resp.json();
+          // Verificar finishReason — si es MAX_TOKENS el JSON está truncado
+          const finishReason=data.candidates?.[0]?.finishReason||'';
+          if(finishReason==='MAX_TOKENS'){
+            lastErr=model+': respuesta truncada (MAX_TOKENS)';continue;
+          }
+          const txt=data.candidates?.[0]?.content?.parts?.[0]?.text||'';
+          if(!txt){lastErr=model+': respuesta vacía';continue;}
+          return txt;
+        }catch(err){
+          if(/quota|resource_exhausted|not found|not supported|MAX_TOKENS/i.test(err.message)){lastErr=err.message;continue;}
+          throw err;
+        }
+      }
+      throw new Error('Gemini no pudo procesar la imagen: '+lastErr);
+    }
+
+    // ── Motor de visión: Claude (solo standalone con API key propia) ──
+    async function _visionClaude(){
+      const apiKey=LS.g('gastomedApiKey','')||'';
+      if(!apiKey) throw new Error('NO_KEY_CLAUDE');
+      const body={model:'claude-sonnet-4-20250514',max_tokens:1000,system:systemPrompt,
+        messages:[{role:'user',content:[
+          {type:'image',source:{type:'base64',media_type:mt,data:b64}},
+          {type:'text',text:'Analiza este ticket/recibo. Devuelve solo el JSON.'}
+        ]}]};
+      const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify(body)});
+      if(!resp.ok){const e=await resp.json();throw new Error(e.error?.message||'HTTP '+resp.status);}
+      const data=await resp.json();
+      return data.content?.[0]?.text||'{}';
+    }
+
+    let result;
+    const gemKey=LS.g('gastomedGeminiKey','')||'';
+    const claudeKey=LS.g('gastomedApiKey','')||'';
+
+    if(_isInArtifact()){
+      // Dentro del artifact de Claude.ai: el proxy NO soporta imágenes base64 grandes
+      // → usar siempre Gemini Vision (directo, sin restricción de sandbox)
+      if(gemKey){
+        result=await _visionGemini();
+      } else {
+        // Sin Gemini key en artifact → el proxy de Claude.ai bloquea imágenes base64
+        // Mostrar pantalla de setup guiado en lugar de intentar y fallar
+        _rscShow('upload');
+        _rscShowGeminiSetup();
+        return;
+      }
+    } else {
+      // Modo standalone (celular/PC, archivo local):
+      // Prioridad: Gemini (gratis, sin cuota de conversación) → Claude (si tiene key)
+      if(gemKey){
+        try{ result=await _visionGemini(); }
+        catch(err){
+          const isNoKey=err.message==='NO_KEY_GEMINI';
+          const isQuota=/sin cuota|quota/i.test(err.message);
+          if(!isNoKey&&!isQuota) throw err;
+          if(claudeKey){ result=await _visionClaude(); }
+          else throw err;
+        }
+      } else if(claudeKey){
+        result=await _visionClaude();
+      } else {
+        throw new Error('NO_KEY_CLAUDE');
+      }
+    }
+
+    let parsed;
+    try{
+      // Limpieza robusta: quita markdown fences, texto previo/posterior al JSON
+      let clean=result.trim();
+      // Extraer bloque JSON si viene envuelto en markdown o con texto extra
+      const jsonMatch=clean.match(/\{[\s\S]*\}/);
+      if(jsonMatch) clean=jsonMatch[0];
+      else clean=clean.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+      parsed=JSON.parse(clean);
+    }catch(e){
+      // Log para debug visible en consola
+      console.error('[RegScan] Parse error. Raw result:', result?.slice?.(0,300));
+      throw new Error('Respuesta de IA inválida ('+String(e.message).slice(0,60)+')');
+    }
+
+    const docFecha=parsed.fecha_documento||today;
+    const filtrados=(parsed.registros||[]).filter(r=>!r.es_total&&!r.es_descuento&&(r.monto||0)>0);
+
+    _rscRecords=filtrados.map((r,i)=>({
+      id:'rsc_'+Date.now()+'_'+i,
+      fecha:r.fecha||docFecha,
+      monto:Math.round((parseFloat(r.monto)||0)*100),
+      descripcion:(r.descripcion||'Gasto').trim(),
+      categoria:_rscMatchCat(r.categoria_sugerida),
+      pago:_rscMatchPago(r.pago_sugerido),
+      _warn:'', _err:''
+    }));
+
+    _rscDetectIssues(parsed);
+
+    // Set thumbnails
+    ['rsc-img-thumb','rsc-img-full'].forEach(id=>{const e=document.getElementById(id);if(e)e.src=_rscImageB64;});
+
+    _rscShow('results');
+    rscRenderResults();
+
+  }catch(err){
+    _rscShow('preview');
+    const msg=err.message||String(err);
+    toast('❌ '+msg.slice(0,80), 5000);
+    // Show error below preview
+    const zone=document.getElementById('rsc-zone-preview');
+    if(zone){
+      const old=zone.querySelector('.rsc-err-al'); if(old)old.remove();
+      const al=document.createElement('div');
+      al.className='al al-r mt10 rsc-err-al';
+      const _rl2=/rate|limit|exceeded|overloaded|Failed to fetch|NetworkError/i.test(msg);
+      const _hasGem2=!!LS.g('gastomedGeminiKey','');
+      const _tip=msg.includes('NO_KEY_CLAUDE')?'<br>Configura tu Claude API Key en ⚙️ Config → IA':
+        msg.includes('NO_KEY_GEMINI')||msg.includes('Para escanear')?'':
+        (_rl2&&!_hasGem2)?'<br>💡 <b>Solución gratis:</b> Añade tu Gemini API Key en ⚙️ Config → IA (obtén una gratis en <b>aistudio.google.com</b>)':'';
+      al.innerHTML=`<span>❌</span><div><b>Error al analizar:</b> ${msg}${_tip}</div>`;
+      zone.appendChild(al);
+      setTimeout(()=>al.remove(),8000);
+    }
+  }
+}
+
+function _rscMatchCat(s){
+  if(!s) return Object.keys(D.budgets||{})[0]||'otros';
+  const sl=s.toLowerCase();
+  const cats=Object.keys(D.budgets||{});
+  if(cats.includes(sl)) return sl;
+  const found=cats.find(c=>sl.includes(c)||c.includes(sl));
+  if(found) return found;
+  if(sl.includes('med')||sl.includes('farm')||sl.includes('salud')) return 'medicamentos';
+  if(sl.includes('alim')||sl.includes('comi')||sl.includes('merca')) return 'alimentacion';
+  if(sl.includes('transp')||sl.includes('movil')||sl.includes('taxi')) return 'transporte';
+  if(sl.includes('serv')||sl.includes('luz')||sl.includes('agua')) return 'servicios';
+  return cats[0]||'otros';
+}
+
+function _rscMatchPago(s){
+  const opts=(typeof getPagoOpts==='function')?getPagoOpts():['Efectivo'];
+  if(!s) return opts[0];
+  const sl=s.toLowerCase();
+  const found=opts.find(p=>p.toLowerCase()===sl||sl.includes(p.toLowerCase())||p.toLowerCase().includes(sl));
+  return found||opts[0];
+}
+
+function _rscDetectIssues(parsed){
+  // Duplicates within extracted records (same fecha + monto)
+  const keyMap={};
+  _rscRecords.forEach(r=>{
+    const k=r.fecha+'|'+r.monto;
+    if(!keyMap[k]) keyMap[k]=[];
+    keyMap[k].push(r.id);
+  });
+  Object.values(keyMap).forEach(ids=>{
+    if(ids.length>1) ids.forEach(id=>{
+      const r=_rscRecords.find(x=>x.id===id);
+      if(r) r._warn=(r._warn?r._warn+' · ':'')+'Mismo monto y fecha que otro ítem detectado';
+    });
+  });
+  // Already in D.gastos
+  _rscRecords.forEach(r=>{
+    const dups=D.gastos.filter(g=>g.fecha===r.fecha&&g.monto===r.monto);
+    if(dups.length) r._warn=(r._warn?r._warn+' · ':'')+'Ya existe un gasto igual en el historial';
+  });
+  // IA-reported inconsistencies
+  const alZ=document.getElementById('rsc-alerts-zone');
+  if(!alZ) return;
+  const incs=parsed?.inconsistencias||[];
+  alZ.innerHTML=incs.length
+    ?`<div class="al al-w mb10"><span>⚠️</span><div><b>La IA reportó:</b><br>${incs.map(s=>'• '+s).join('<br>')}</div></div>`
+    :'';
+}
+
+function rscToggleImg(){
+  _rscImgExpanded=!_rscImgExpanded;
+  const ex=document.getElementById('rsc-img-expanded');
+  if(ex) ex.style.display=_rscImgExpanded?'block':'none';
+}
+
+/* ── Render results ── */
+function rscRenderResults(){
+  const listEl=document.getElementById('rsc-records-list');
+  const actionBar=document.getElementById('rsc-action-bar');
+  if(!listEl) return;
+
+  // Update header count
+  const countLbl=document.getElementById('rsc-res-count-lbl');
+  const metaLbl=document.getElementById('rsc-res-meta');
+  const total=_rscRecords.reduce((s,r)=>s+r.monto,0);
+  if(countLbl) countLbl.textContent=`${_rscRecords.length} registro${_rscRecords.length!==1?'s':''} detectado${_rscRecords.length!==1?'s':''}`;
+  if(metaLbl)  metaLbl.textContent=`Total: ${fmtM(total)} · Toca imagen para ampliar`;
+
+  if(!_rscRecords.length){
+    listEl.innerHTML=`<div class="rsc-empty-state">
+      <div style="font-size:2rem">🔍</div>
+      <div class="fw6 tx-sm mt8">No se detectaron gastos</div>
+      <div class="tx-xs tx-m mt4">Intenta con una imagen más clara o con mejor iluminación</div>
+      <button class="btn btn-s mt12" onclick="rscClearAll()">← Intentar con otra imagen</button>
+    </div>`;
+    if(actionBar) actionBar.style.display='none';
+    return;
+  }
+
+  const cats=Object.keys(D.budgets||{}).concat(['medicamentos','salud','alimentacion','transporte','servicios','hogar','entretenimiento','otros']);
+  const uniqueCats=[...new Set(cats)];
+  const pagoOpts=(typeof getPagoOpts==='function')?getPagoOpts():['Efectivo'];
+  const warnCount=_rscRecords.filter(r=>r._warn).length;
+
+  let html='';
+  if(warnCount){
+    html+=`<div class="al al-w mb10"><span>⚠️</span><div>${warnCount} registro${warnCount!==1?'s tienen':'  tiene'} advertencias — revisa antes de guardar.</div></div>`;
+  }
+
+  _rscRecords.forEach((r,i)=>{
+    const hasWarn=!!r._warn;
+    html+=`
+    <div class="rsc-card" id="rsccard_${r.id}" style="animation-delay:${i*0.04}s">
+      <!-- Card header -->
+      <div class="rsc-card-hdr">
+        <div class="rsc-card-num">${i+1}</div>
+        <div class="rsc-card-info">
+          <div class="rsc-card-desc" title="${r.descripcion}">${r.descripcion}</div>
+          <div class="rsc-card-date">${fmtD(r.fecha)}</div>
+        </div>
+        <div class="rsc-card-right">
+          <div class="rsc-card-amt">${fmtM(r.monto)}</div>
+          <button class="rsc-del-btn" onclick="rscDeleteRecord('${r.id}')" title="Eliminar">✕</button>
+        </div>
+      </div>
+      ${hasWarn?`<div class="rsc-warn-bar"><span>⚠️</span> ${r._warn}</div>`:''}
+      <!-- Editable fields -->
+      <div class="rsc-fields">
+        <div class="rsc-row2">
+          <div class="rsc-field">
+            <label class="fl">Fecha</label>
+            <input type="date" class="fc rsc-inp" value="${r.fecha}" onchange="_rscUpd('${r.id}','fecha',this.value)">
+          </div>
+          <div class="rsc-field">
+            <label class="fl">Monto S/.</label>
+            <input type="number" step="0.01" class="fc rsc-inp" value="${(r.monto/100).toFixed(2)}" onchange="_rscUpd('${r.id}','monto',this.value)">
+          </div>
+        </div>
+        <div class="rsc-row2">
+          <div class="rsc-field">
+            <label class="fl">Categoría</label>
+            <select class="fc rsc-inp" onchange="_rscUpd('${r.id}','categoria',this.value)">
+              ${uniqueCats.map(c=>`<option value="${c}"${c===r.categoria?' selected':''}>${CS(c)?.icon||''} ${c.charAt(0).toUpperCase()+c.slice(1)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="rsc-field">
+            <label class="fl">Forma de pago</label>
+            <select class="fc rsc-inp" onchange="_rscUpd('${r.id}','pago',this.value)">
+              ${pagoOpts.map(p=>`<option value="${p}"${p===r.pago?' selected':''}>${p}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="rsc-field">
+          <label class="fl">Descripción</label>
+          <input type="text" class="fc rsc-inp" value="${(r.descripcion||'').replace(/"/g,'&quot;')}" onchange="_rscUpd('${r.id}','descripcion',this.value)">
+        </div>
+      </div>
+    </div>`;
+  });
+
+  listEl.innerHTML=html;
+
+  if(actionBar){
+    actionBar.style.display='';
+    const sb=document.getElementById('rsc-commit-status');
+    if(sb) sb.textContent=warnCount
+      ?`${warnCount} advertencia${warnCount!==1?'s':''} — puedes guardar igual o editar primero`
+      :`${_rscRecords.length} registro${_rscRecords.length!==1?'s listos':'  listo'} · Total ${fmtM(total)}`;
+  }
+}
+
+function _rscUpd(id,field,val){
+  const r=_rscRecords.find(x=>x.id===id);
+  if(!r) return;
+  if(field==='monto') r.monto=Math.round((parseFloat(val)||0)*100);
+  else r[field]=val;
+  // Re-validate warnings
+  _rscRecords.forEach(x=>{x._warn='';});
+  const keyMap={};
+  _rscRecords.forEach(x=>{const k=x.fecha+'|'+x.monto;if(!keyMap[k])keyMap[k]=[];keyMap[k].push(x.id);});
+  Object.values(keyMap).forEach(ids=>{if(ids.length>1)ids.forEach(id2=>{const x=_rscRecords.find(z=>z.id===id2);if(x)x._warn=(x._warn?x._warn+' · ':'')+'Mismo monto y fecha que otro ítem';});});
+  _rscRecords.forEach(x=>{const dups=D.gastos.filter(g=>g.fecha===x.fecha&&g.monto===x.monto);if(dups.length)x._warn=(x._warn?x._warn+' · ':'')+'Ya existe gasto igual en historial';});
+  // Update just the warn bar of this card
+  const card=document.getElementById('rsccard_'+id);
+  if(card){
+    const wb=card.querySelector('.rsc-warn-bar');
+    if(r._warn){
+      if(wb) wb.innerHTML=`<span>⚠️</span> ${r._warn}`;
+      else {
+        const hdr=card.querySelector('.rsc-card-hdr');
+        if(hdr){const nwb=document.createElement('div');nwb.className='rsc-warn-bar';nwb.innerHTML=`<span>⚠️</span> ${r._warn}`;hdr.after(nwb);}
+      }
+      card.classList.add('rsc-card-warn');
+    } else {
+      if(wb)wb.remove();
+      card.classList.remove('rsc-card-warn');
+    }
+  }
+  // Update footer status
+  const warnCount=_rscRecords.filter(x=>x._warn).length;
+  const total=_rscRecords.reduce((s,x)=>s+x.monto,0);
+  const sb=document.getElementById('rsc-commit-status');
+  if(sb) sb.textContent=warnCount?`${warnCount} advertencia${warnCount!==1?'s':''}`:
+    `${_rscRecords.length} registro${_rscRecords.length!==1?'s listos':'  listo'} · Total ${fmtM(total)}`;
+}
+
+function rscDeleteRecord(id){
+  const card=document.getElementById('rsccard_'+id);
+  if(card){ card.style.opacity='0'; card.style.transform='translateX(24px) scale(.96)'; setTimeout(()=>card.remove(),220); }
+  _rscRecords=_rscRecords.filter(r=>r.id!==id);
+  // Update count label
+  const total=_rscRecords.reduce((s,r)=>s+r.monto,0);
+  const cl=document.getElementById('rsc-res-count-lbl');
+  if(cl) cl.textContent=`${_rscRecords.length} registro${_rscRecords.length!==1?'s':''}`;
+  const ml=document.getElementById('rsc-res-meta');
+  if(ml) ml.textContent=`Total: ${fmtM(total)} · Toca imagen para ampliar`;
+  const ab=document.getElementById('rsc-action-bar');
+  if(!_rscRecords.length&&ab) ab.style.display='none';
+}
+
+function rscCommitAll(){
+  if(!_rscRecords.length) return toast('⚠️ No hay registros para guardar');
+  const btn=document.getElementById('rsc-commit-btn');
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Guardando...'; }
+  let saved=0;
+  _rscRecords.forEach(r=>{
+    if(r._err) return;
+    D.gastos.push({id:uid(),fecha:r.fecha,monto:r.monto,categoria:r.categoria||'otros',
+      subcategoria:'',formaPago:r.pago||'Efectivo',detalle:r.descripcion||'',
+      notas:'📷 Importado por foto',foto:'',descuento:0,movilidad:0,tags:['foto-scan']});
+    saved++;
+  });
+  saveAll();
+  const dm=document.getElementById('rsc-done-msg');
+  const ds=document.getElementById('rsc-done-sub');
+  if(dm) dm.textContent=`${saved} gasto${saved!==1?'s':''} guardado${saved!==1?'s':''}`;
+  if(ds) ds.textContent=`Importado desde foto · ${fmtD(todayISO())} · Total ${fmtM(_rscRecords.reduce((s,r)=>s+r.monto,0))}`;
+  _rscShow('done');
+  toast(`✅ ${saved} gasto${saved!==1?'s':''} registrado${saved!==1?'s':''} desde foto`);
+}
+
+function rscScanAnother(){
+  _rscReset(false);
+  setTimeout(()=>{ const fi=document.getElementById('rsc-file-input'); if(fi) fi.click(); },150);
+}
+/* ═══════════════════════════════════════ FIN REG-SCAN MODULE ══ */
+
 
 /* ═══════════════════════════════════════ GES FIN / PRESU MODULE ══ */
 let _gfScenario='base';
@@ -17200,6 +17745,221 @@ input[type="month"]::-webkit-calendar-picker-indicator {
   color: var(--accent2) !important;
 }
 
+/* ═══════════════════════════════════════ REG-SCAN CSS ══ */
+
+/* ── Scan entry button (top-right of register screen) ── */
+.ri-scan-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:7px 13px;border-radius:99px;
+  background:linear-gradient(135deg,rgba(62,223,170,.16),rgba(91,159,232,.1));
+  border:1px solid rgba(62,223,170,.3);
+  color:var(--accent3);font-size:.79rem;font-weight:700;
+  cursor:pointer;white-space:nowrap;
+  box-shadow:0 0 14px rgba(62,223,170,.12),inset 0 1px 0 rgba(255,255,255,.05);
+  transition:all .22s cubic-bezier(.4,0,.2,1);
+  font-family:var(--font);letter-spacing:.2px;
+}
+.ri-scan-btn:hover{
+  background:linear-gradient(135deg,rgba(62,223,170,.28),rgba(91,159,232,.18));
+  border-color:rgba(62,223,170,.55);
+  box-shadow:0 0 20px rgba(62,223,170,.25),inset 0 1px 0 rgba(255,255,255,.08);
+  transform:translateY(-1px);
+}
+.ri-scan-btn:active{transform:scale(.95);}
+
+/* ── Header ── */
+.rsc-hdr{ justify-content:space-between !important; }
+.rsc-hdr-left{ display:flex;align-items:center;gap:10px; }
+.rsc-hdr-ico{
+  width:34px;height:34px;flex-shrink:0;
+  background:linear-gradient(135deg,rgba(91,159,232,.22),rgba(62,223,170,.14));
+  border:1px solid rgba(91,159,232,.28);border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:1rem;
+  box-shadow:0 2px 10px rgba(91,159,232,.15);
+}
+.rsc-hdr-title{font-family:var(--font2);font-weight:700;font-size:.92rem;color:var(--text);line-height:1.2}
+.rsc-hdr-sub{font-size:.69rem;color:var(--text3);letter-spacing:.3px;margin-top:2px;transition:all .2s}
+.rsc-close-btn{
+  width:34px;height:34px;border-radius:9px;flex-shrink:0;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);
+  color:var(--text3);font-size:15px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all .18s cubic-bezier(.4,0,.2,1);
+}
+.rsc-close-btn:hover{background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.3);color:var(--danger);}
+.rsc-close-btn:active{transform:scale(.9);}
+
+/* ── Dropzone ── */
+.rsc-dropzone{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  border:2px dashed rgba(91,159,232,.28);border-radius:var(--r);
+  padding:36px 20px;text-align:center;cursor:pointer;
+  background:rgba(91,159,232,.03);position:relative;overflow:hidden;
+  transition:all .25s cubic-bezier(.4,0,.2,1);
+  min-height:200px;
+}
+.rsc-dropzone:hover,.rsc-dropzone:active{
+  border-color:rgba(91,159,232,.55);background:rgba(91,159,232,.08);
+  transform:scale(.995);
+}
+.rsc-drop-glow{
+  position:absolute;top:-40%;left:50%;transform:translateX(-50%);
+  width:200px;height:200px;border-radius:50%;
+  background:radial-gradient(circle,rgba(91,159,232,.12) 0%,transparent 70%);
+  pointer-events:none;animation:rscPulse 3s ease-in-out infinite;
+}
+@keyframes rscPulse{0%,100%{opacity:.5;transform:translateX(-50%) scale(1)}50%{opacity:1;transform:translateX(-50%) scale(1.15)}}
+.rsc-drop-ico{font-size:3rem;margin-bottom:12px;filter:drop-shadow(0 0 16px rgba(91,159,232,.4));position:relative;z-index:1}
+.rsc-drop-title{font-weight:700;font-size:.95rem;color:var(--text);margin-bottom:6px;position:relative;z-index:1}
+.rsc-drop-sub{font-size:.78rem;color:var(--text2);margin-bottom:8px;position:relative;z-index:1}
+.rsc-drop-formats{
+  font-size:.68rem;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;
+  background:rgba(255,255,255,.04);border:1px solid var(--border2);
+  border-radius:99px;padding:3px 10px;position:relative;z-index:1;
+}
+
+/* ── Preview ── */
+.rsc-img-container{
+  position:relative;border-radius:var(--r);overflow:hidden;
+  border:1px solid rgba(91,159,232,.2);
+  box-shadow:0 4px 20px rgba(0,0,0,.3);
+  background:var(--bg3);
+}
+.rsc-img-container img{width:100%;max-height:340px;object-fit:contain;display:block}
+.rsc-img-del-btn{
+  position:absolute;top:8px;right:8px;
+  background:rgba(0,0,0,.65);backdrop-filter:blur(6px);
+  border:1px solid rgba(255,255,255,.1);color:#fff;
+  border-radius:50%;width:32px;height:32px;font-size:14px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .18s;
+}
+.rsc-img-del-btn:hover{background:rgba(248,113,113,.8);}
+
+/* ── Loading ── */
+.rsc-loading-box{
+  background:var(--bg2);border:1px solid var(--border2);border-radius:var(--r);
+  padding:36px 24px;text-align:center;
+  box-shadow:0 4px 24px rgba(0,0,0,.25);
+  animation:cfgFadeIn .3s ease both;
+}
+.rsc-loading-ico{
+  width:56px;height:56px;border-radius:50%;margin:0 auto 16px;
+  background:linear-gradient(135deg,rgba(91,159,232,.2),rgba(62,223,170,.12));
+  border:1px solid rgba(91,159,232,.25);
+  display:flex;align-items:center;justify-content:center;
+}
+.rsc-spin{width:28px !important;height:28px !important;border-width:3px !important;border-top-color:var(--accent2) !important;}
+.rsc-loading-title{font-family:var(--font2);font-weight:700;font-size:.95rem;color:var(--text);margin-bottom:6px}
+.rsc-loading-sub{font-size:.78rem;color:var(--text2);margin-bottom:16px}
+.rsc-loading-dots{display:flex;gap:6px;justify-content:center}
+.rsc-loading-dots span{
+  width:7px;height:7px;border-radius:50%;background:var(--accent);
+  animation:rscDot 1.2s ease-in-out infinite;
+}
+.rsc-loading-dots span:nth-child(2){animation-delay:.2s;background:var(--accent2)}
+.rsc-loading-dots span:nth-child(3){animation-delay:.4s;background:var(--accent3)}
+@keyframes rscDot{0%,80%,100%{transform:scale(.6);opacity:.4}40%{transform:scale(1);opacity:1}}
+
+/* ── Results: mini image bar ── */
+.rsc-res-img-bar{
+  display:flex;align-items:center;gap:10px;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:var(--rs);
+  padding:9px 12px;margin-bottom:10px;cursor:pointer;
+  transition:border-color .15s;
+}
+.rsc-res-img-bar:hover{border-color:rgba(91,159,232,.25)}
+.rsc-res-thumb{
+  width:44px;height:44px;border-radius:8px;object-fit:cover;
+  border:1px solid rgba(91,159,232,.2);flex-shrink:0;
+}
+.rsc-img-expanded-wrap{
+  margin-bottom:12px;border-radius:var(--r);overflow:hidden;
+  border:1px solid rgba(91,159,232,.15);
+  animation:cfgFadeIn .22s ease;
+}
+.rsc-del-img-btn{
+  background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);
+  color:var(--danger);border-radius:8px;padding:5px 10px;
+  font-size:.72rem;font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;
+  transition:all .15s;font-family:var(--font);
+}
+.rsc-del-img-btn:hover{background:rgba(248,113,113,.2);}
+
+/* ── Record cards ── */
+.rsc-card{
+  background:var(--card);
+  border:1px solid rgba(91,159,232,.1);
+  border-radius:var(--r);padding:12px;margin-bottom:9px;
+  box-shadow:var(--shadow-card);position:relative;overflow:hidden;
+  transition:border-color .2s,opacity .22s cubic-bezier(.4,0,.2,1),transform .22s cubic-bezier(.4,0,.2,1);
+  animation:slideInUp .26s cubic-bezier(.4,0,.2,1) both;
+}
+.rsc-card::after{content:'';position:absolute;inset:0;background:var(--card-shine);pointer-events:none;border-radius:inherit}
+.rsc-card-warn{border-color:rgba(240,168,74,.28) !important;background:rgba(240,168,74,.04) !important}
+.rsc-card-hdr{display:flex;align-items:flex-start;gap:8px;margin-bottom:0}
+.rsc-card-num{
+  width:22px;height:22px;border-radius:50%;flex-shrink:0;margin-top:2px;
+  background:rgba(91,159,232,.14);border:1px solid rgba(91,159,232,.22);
+  color:var(--accent2);font-size:.67rem;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+}
+.rsc-card-info{flex:1;min-width:0}
+.rsc-card-desc{font-weight:600;font-size:.85rem;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rsc-card-date{font-size:.7rem;color:var(--text3);margin-top:1px}
+.rsc-card-right{display:flex;align-items:center;gap:7px;flex-shrink:0}
+.rsc-card-amt{font-family:var(--font2);font-weight:700;font-size:.96rem;color:var(--danger);white-space:nowrap}
+.rsc-del-btn{
+  width:27px;height:27px;border-radius:7px;flex-shrink:0;
+  background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.22);
+  color:var(--danger);font-size:12px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all .15s;
+}
+.rsc-del-btn:hover{background:rgba(248,113,113,.25);transform:scale(1.08)}
+.rsc-del-btn:active{transform:scale(.9)}
+.rsc-warn-bar{
+  display:flex;align-items:flex-start;gap:6px;
+  background:rgba(240,168,74,.08);border:1px solid rgba(240,168,74,.2);
+  border-radius:var(--rs);padding:6px 9px;
+  font-size:.72rem;color:var(--warn);margin:7px 0 0;line-height:1.4;
+  animation:cfgFadeIn .2s ease;
+}
+.rsc-fields{display:flex;flex-direction:column;gap:7px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border2)}
+.rsc-row2{display:flex;gap:7px}
+.rsc-field{flex:1;min-width:0}
+.rsc-inp{font-size:.82rem !important;padding:8px 10px !important}
+
+/* ── Commit bar ── */
+.rsc-commit-bar{
+  background:var(--bg2);border:1px solid rgba(91,159,232,.14);
+  border-radius:var(--r);padding:14px;
+  box-shadow:0 -4px 20px rgba(0,0,0,.2);
+  animation:slideInUp .3s cubic-bezier(.4,0,.2,1);
+}
+.ta-c{text-align:center}
+.mt16{margin-top:16px}
+
+/* ── Empty state ── */
+.rsc-empty-state{
+  text-align:center;padding:32px 20px;
+  background:var(--bg2);border:1px solid var(--border2);
+  border-radius:var(--r);animation:cfgFadeIn .25s ease;
+}
+
+/* ── Done ── */
+.rsc-done-box{
+  background:var(--bg2);border:1px solid rgba(62,223,170,.2);
+  border-radius:var(--r);padding:32px 24px;text-align:center;
+  box-shadow:0 0 30px rgba(62,223,170,.08);
+  animation:cfgFadeIn .35s cubic-bezier(.4,0,.2,1);
+}
+.rsc-done-check{font-size:3rem;animation:rscDoneCheck .4s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes rscDoneCheck{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+.rsc-done-title{font-family:var(--font2);font-weight:700;font-size:1.05rem;color:var(--text);margin-top:10px}
+
+/* ═══════════════════════════════════════ FIN REG-SCAN CSS ══ */
+
 /* ═══════════════════════════════════════ GES FIN / PRESU CSS ══ */
 /* Header */
 .gf-header{display:flex;align-items:center;gap:10px}
@@ -17271,6 +18031,116 @@ input[type="month"]::-webkit-calendar-picker-indicator {
 /* ═══════════════════════════════════════ FIN GES FIN CSS ══ */
 
 </style>
+
+<!-- ══ REG-SCAN: Photo register fullscreen ══ -->
+<div class="mfull" id="mf-regscan">
+
+  <!-- ── Header ── -->
+  <div class="mfhdr rsc-hdr">
+    <div class="rsc-hdr-left">
+      <div class="rsc-hdr-ico">📷</div>
+      <div>
+        <div class="rsc-hdr-title">Registrar por Foto</div>
+        <div class="rsc-hdr-sub" id="rsc-hdr-sub">Sube un ticket o recibo</div>
+      </div>
+    </div>
+    <button class="rsc-close-btn" onclick="closeRegScan()" title="Cerrar">✕</button>
+  </div>
+
+  <!-- ── Body ── -->
+  <div class="mfbody" id="rsc-body">
+
+    <!-- STEP 1: Upload -->
+    <div id="rsc-zone-upload">
+      <label class="rsc-dropzone" for="rsc-file-input" id="rsc-drop">
+        <div class="rsc-drop-glow"></div>
+        <div class="rsc-drop-ico">📷</div>
+        <div class="rsc-drop-title">Subir foto de ticket o recibo</div>
+        <div class="rsc-drop-sub">Toca para elegir desde galería o cámara</div>
+        <div class="rsc-drop-formats">JPG · PNG · WEBP</div>
+        <input type="file" id="rsc-file-input" accept="image/*" style="display:none" onchange="rscLoadImage(this)">
+      </label>
+      <div class="al al-i mt12">
+        <span>🤖</span>
+        <div>La IA de Claude analizará el ticket y extraerá automáticamente todos los gastos con monto, categoría y fecha.</div>
+      </div>
+    </div>
+
+    <!-- STEP 2: Preview + Analyze -->
+    <div id="rsc-zone-preview" style="display:none">
+      <div class="rsc-img-container">
+        <img id="rsc-img-preview" src="" alt="Ticket">
+        <button class="rsc-img-del-btn" onclick="rscClearAll()" title="Quitar imagen">✕</button>
+      </div>
+      <button class="btn btn-p btn-lg mt12" id="rsc-analyze-btn" onclick="rscAnalyzeImage()">
+        🤖 Analizar imagen con IA
+      </button>
+      <label class="btn btn-s btn-lg mt8" style="cursor:pointer;text-align:center" for="rsc-file-input">
+        🔄 Cambiar imagen
+      </label>
+    </div>
+
+    <!-- STEP 3: Loading -->
+    <div id="rsc-zone-loading" style="display:none">
+      <div class="rsc-loading-box">
+        <div class="rsc-loading-ico">
+          <div class="spin rsc-spin"></div>
+        </div>
+        <div class="rsc-loading-title">Analizando imagen...</div>
+        <div class="rsc-loading-sub">La IA está leyendo el ticket y extrayendo los gastos</div>
+        <div class="rsc-loading-dots">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 4: Results -->
+    <div id="rsc-zone-results" style="display:none">
+
+      <!-- Mini image + clear button -->
+      <div class="rsc-res-img-bar">
+        <img id="rsc-img-thumb" src="" class="rsc-res-thumb" onclick="rscToggleImg()" title="Ver/ocultar imagen">
+        <div style="flex:1;min-width:0">
+          <div class="fw6 tx-sm" id="rsc-res-count-lbl">Registros detectados</div>
+          <div class="tx-xs tx-m" id="rsc-res-meta">Toca la imagen para ampliar</div>
+        </div>
+        <button class="rsc-del-img-btn" onclick="rscClearAll()">🗑️ Borrar foto</button>
+      </div>
+      <!-- Expanded image -->
+      <div id="rsc-img-expanded" class="rsc-img-expanded-wrap" style="display:none">
+        <img id="rsc-img-full" src="" style="width:100%;border-radius:var(--r);max-height:280px;object-fit:contain">
+      </div>
+
+      <!-- AI warnings -->
+      <div id="rsc-alerts-zone"></div>
+
+      <!-- Records list -->
+      <div id="rsc-records-list"></div>
+
+      <!-- Commit bar -->
+      <div id="rsc-action-bar" style="display:none">
+        <div class="rsc-commit-bar">
+          <button class="btn btn-ok btn-lg" id="rsc-commit-btn" onclick="rscCommitAll()">
+            ✅ Guardar todos los registros
+          </button>
+          <div class="tx-xs tx-m mt6 ta-c" id="rsc-commit-status"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 5: Done -->
+    <div id="rsc-zone-done" style="display:none">
+      <div class="rsc-done-box">
+        <div class="rsc-done-check">✅</div>
+        <div class="rsc-done-title" id="rsc-done-msg">Registros guardados</div>
+        <div class="tx-xs tx-m mt4 ta-c" id="rsc-done-sub"></div>
+        <button class="btn btn-p btn-lg mt16" onclick="rscScanAnother()">📷 Escanear otro ticket</button>
+        <button class="btn btn-s btn-lg mt8" onclick="closeRegScan()">Volver a Registrar</button>
+      </div>
+    </div>
+
+  </div><!-- /mfbody -->
+</div><!-- /mf-regscan -->
 
 </body>
 </html>
